@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>롤링페이퍼 관리</title><link rel="stylesheet" href="style.css"></head><body>
+<div class="demo" id="demo" hidden>시험 모드: 이 브라우저에만 저장됩니다</div>
+<main class="wide"><h1>롤링페이퍼 관리</h1><p id="status" role="status"></p><button id="login" hidden>Google로 로그인</button>
+<div id="app" hidden>
+<div class="card"><h2>1. 명단과 제출 기간</h2>
+  <label for="names">학생 이름 (한 줄에 한 명)</label><textarea id="names" rows="8"></textarea>
+  <label for="teacher">교사 이름</label><input type="text" id="teacher">
+  <label><input type="checkbox" id="open"> 학생 제출 받기</label><button id="save">저장</button></div>
+<div class="card"><h2>2. 링크</h2>
+  <p><strong>학급 링크</strong>: 학생이 주인공을 직접 골라 여러 친구에게 씁니다.</p>
+  <p class="link" id="classLink"></p><button id="copyClass">학급 링크 복사</button>
+  <p><strong>주인공별 링크</strong>: 주인공이 정해진 링크입니다. 그 친구에게만 쓸 때 보내세요.</p>
+  <p id="noLinks">명단을 저장하면 여기에 학생별 링크가 나와요.</p>
+  <div class="scroll"><table id="linkTable" hidden><thead><tr><th>주인공</th><th>링크</th><th></th></tr></thead><tbody id="links"></tbody></table></div>
+  <button class="sub" id="copyAll">주인공별 링크 모두 복사 (이름과 링크, 엑셀에 붙여넣기용)</button>
+  <p id="localNote" class="err" hidden>지금은 내 컴퓨터 주소라 학생이 열 수 없어요. GitHub에 올린 뒤 그 주소의 관리 화면에서 복사하세요.</p></div>
+<div class="card"><h2>3. 제출 현황</h2><button class="sub" id="reload">새로고침</button>
+  <div class="scroll"><table><thead><tr><th>주인공</th><th>제출</th><th>아직 안 쓴 사람</th></tr></thead><tbody id="stat"></tbody></table></div></div>
+<div class="card"><h2>4. 문구 확인과 미리보기</h2><label for="who">주인공</label><select id="who"></select><div id="list"></div>
+  <p><button class="sub" id="shuffle">자리 다시 섞기</button></p><div id="view"></div></div>
+<div class="card"><h2>5. 출력</h2><p>인쇄 창에서 용지 B4(JIS), 여백 없음, 배율 100%, 배경 그래픽을 켜 주세요.</p>
+  <button id="p1">선택한 학생 출력</button><button id="pa">전체 출력</button><button class="sub" id="csv">CSV 저장</button></div>
+<div class="card"><h2>6. 마무리</h2><p>나눠 준 뒤 명단과 문구를 모두 지웁니다. 되돌릴 수 없어요.</p><button id="wipe">전체 삭제</button><button class="sub" id="logout">로그아웃</button></div>
+</div></main><div id="print"></div>
+<script type="module">
+import { openStore } from './store.js';
+import { people, clean, len, renderPaper } from './paper.js';
+const $ = i => document.getElementById(i);
+const say = (t, err) => { $('status').textContent = t; $('status').className = err ? 'err' : ''; if (t) $('status').scrollIntoView({ block: 'nearest' }); };
+let L, store, cfg = null, msgs = [], seeds = {};
+const students = () => people(cfg).filter(p => p.role === 'student');
+const nameOf = id => people(cfg).find(p => p.id === id)?.name || '(명단에 없음)';
+const ERR = {
+  'permission-denied': '권한이 없어요. 교사 계정인지, 보안 규칙의 이메일이 맞는지 확인하세요.',
+  'auth/configuration-not-found': 'Firebase에서 Google 로그인이 아직 켜지지 않았어요. Authentication > 로그인 방법에서 Google을 사용 설정하세요.',
+  'auth/operation-not-allowed': 'Firebase에서 Google 로그인이 꺼져 있어요. Authentication > 로그인 방법에서 Google을 사용 설정하세요.',
+  'auth/unauthorized-domain': '이 주소가 승인된 도메인에 없어요. Authentication > 설정 > 승인된 도메인에 추가하세요.',
+  'auth/popup-blocked': '로그인 창이 차단됐어요. 팝업을 허용하고 다시 눌러 주세요.',
+  'auth/popup-closed-by-user': '로그인 창이 닫혔어요. 다시 눌러 주세요.',
+  'auth/cancelled-popup-request': '로그인 창이 닫혔어요. 다시 눌러 주세요.'
+};
+const run = f => async () => {
+  try { await f(); } catch (e) { say(ERR[e.code] || '오류: ' + (e.message || e.code), true); }
+};
+const link = id => new URL(id ? `index.html?to=${id}` : 'index.html', location.href).href;
+const add = (p, tag, t, c) => { const e = document.createElement(tag); if (t != null) e.textContent = t; if (c) e.className = c; p.append(e); return e; };
+async function load() {
+  const [c, m, s] = await Promise.all([store.getConfig(), store.messages(), store.placements()]);
+  cfg = c; msgs = m; seeds = Object.fromEntries(s.map(p => [p.id, p.seed]));
+  draw();
+}
+function draw() {
+  const P = people(cfg), S = students();
+  $('names').value = S.map(p => p.name).join('\n');
+  $('teacher').value = P.find(p => p.role === 'teacher')?.name || '';
+  $('open').checked = !!cfg?.open;
+  $('classLink').textContent = link();
+  $('links').replaceChildren();
+  for (const s of S) {
+    const tr = add($('links'), 'tr');
+    add(tr, 'td', s.name); add(add(tr, 'td', null, 'link'), 'span', link(s.id));
+    add(add(tr, 'td'), 'button', '복사', 'sub').onclick = run(() => copy(link(s.id), `${s.name} 링크를 복사했어요.`));
+  }
+  $('linkTable').hidden = !S.length; $('noLinks').hidden = !!S.length; $('copyAll').disabled = !S.length;
+  $('stat').replaceChildren();
+  for (const s of S) {
+    const W = P.filter(p => p.id !== s.id), done = new Set(msgs.filter(m => m.to === s.id).map(m => m.from)), tr = add($('stat'), 'tr');
+    add(tr, 'td', s.name);
+    add(tr, 'td', `${W.filter(w => done.has(w.id)).length} / ${W.length}`);
+    add(tr, 'td', W.filter(w => !done.has(w.id)).map(w => w.name).join(', ') || '모두 제출');
+  }
+  const keep = $('who').value;
+  $('who').replaceChildren(...S.map(p => new Option(p.name, p.id)));
+  if (S.some(p => p.id === keep)) $('who').value = keep;
+  detail();
+}
+function detail() {
+  const to = $('who').value;
+  $('list').replaceChildren(); $('view').replaceChildren();
+  if (!to) return;
+  for (const m of msgs.filter(m => m.to === to)) {
+    const r = add($('list'), 'div', null, 'row' + (m.hidden ? ' off' : '')), n = nameOf(m.from);
+    add(r, 'strong', n + ': '); add(r, 'span', m.text); add(r, 'br');
+    add(r, 'button', '수정', 'sub').onclick = run(async () => {
+      const v = prompt('문구 수정', m.text);
+      if (v == null) return;
+      const t = clean(v);
+      if (!t || len(t) > L.maxChars) return alert(`1~${L.maxChars}자로 써 주세요.`);
+      await store.update(m.id, { text: t }); m.text = t; draw();
+    });
+    add(r, 'button', m.hidden ? '보이기' : '숨기기', 'sub').onclick = run(async () => { await store.update(m.id, { hidden: !m.hidden }); m.hidden = !m.hidden; draw(); });
+    add(r, 'button', '삭제(다시 제출 가능)', 'sub').onclick = run(async () => {
+      if (confirm(`${n}의 문구를 삭제할까요? 되돌릴 수 없어요.`)) { await store.remove(m.id); msgs = msgs.filter(x => x !== m); draw(); }
+    });
+  }
+  const { svg, problems } = renderPaper(L, cfg, to, msgs, seeds[to]);
+  problems.forEach(t => add($('view'), 'p', t, 'err'));
+  $('view').append(svg);
+}
+async function print(ids) {
+  if (!ids.length) return;
+  await load();
+  const R = ids.map(id => renderPaper(L, cfg, id, msgs, seeds[id])), bad = R.flatMap(r => r.problems);
+  if (bad.length && !confirm(bad.join('\n') + '\n\n그래도 출력할까요?')) return;
+  const bg = new Image(); bg.src = L.background; await bg.decode();
+  $('print').replaceChildren(...R.map(r => r.svg));
+  window.print();
+}
+$('save').onclick = run(async () => {
+  const names = $('names').value.split('\n').map(clean).filter(Boolean), t = clean($('teacher').value), all = t ? [...names, t] : names;
+  if (!names.length) return say('학생 이름을 넣어 주세요.', true);
+  if (new Set(all).size !== all.length) return say('같은 이름이 있어요. 김민수A처럼 구분해 주세요.', true);
+  if (all.some(n => len(n) > 10)) return say('이름은 10자까지 쓸 수 있어요.', true);
+  if (all.length - 1 > L.slots.length) return say(`칸이 ${L.slots.length}개라 교사를 포함해 ${L.slots.length + 1}명까지 가능해요.`, true);
+  const old = people(cfg), map = {};
+  const put = (name, role, order) => {
+    const id = old.find(p => p.name === name && p.role === role)?.id || 'p' + crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+    map[id] = { name, role, order };
+  };
+  names.forEach((n, i) => put(n, 'student', i));
+  if (t) put(t, 'teacher', names.length);
+  const lost = old.filter(p => !map[p.id] && msgs.some(m => m.to === p.id || m.from === p.id));
+  if (lost.length && !confirm(`${lost.map(p => p.name).join(', ')}와 관련된 문구가 출력에서 빠집니다. 이름을 바꿔도 새 사람으로 처리돼요. 계속할까요?`)) return;
+  const next = { open: $('open').checked, people: map };
+  await store.saveConfig(next); cfg = next; draw(); say('저장했어요.');
+});
+const copy = async (t, msg) => {
+  try { await navigator.clipboard.writeText(t); say(msg); }
+  catch { say('복사가 막혔어요. 화면의 링크를 직접 드래그해 복사해 주세요.', true); }
+};
+$('copyClass').onclick = run(() => copy(link(), '학급 링크를 복사했어요.'));
+$('copyAll').onclick = run(() => students().length
+  ? copy(students().map(s => `${s.name}\t${link(s.id)}`).join('\n'), `주인공별 링크 ${students().length}개를 복사했어요. 엑셀에 붙여넣으면 이름과 링크가 나뉘어요.`)
+  : say('먼저 명단을 저장해 주세요.', true));
+$('reload').onclick = run(load);
+$('who').onchange = detail;
+$('shuffle').onclick = run(async () => { const id = $('who').value; if (id) { const s = crypto.getRandomValues(new Uint32Array(1))[0]; await store.saveSeed(id, s); seeds[id] = s; detail(); } });
+$('p1').onclick = run(() => print($('who').value ? [$('who').value] : []));
+$('pa').onclick = run(() => print(students().map(s => s.id)));
+$('csv').onclick = () => {
+  const q = v => { v = String(v); if (/^[=+\-@\t]/.test(v)) v = "'" + v; return '"' + v.replaceAll('"', '""') + '"'; };
+  const n = L.slots.length, blank = [...Array(n).keys()];
+  const rows = [['주인공', ...blank.flatMap(i => [`문구${i + 1}`, `이름${i + 1}`])]];
+  for (const s of students()) {
+    const M = msgs.filter(m => m.to === s.id && !m.hidden);
+    rows.push([s.name, ...blank.flatMap(i => M[i] ? [M[i].text, nameOf(M[i].from)] : ['', ''])]);
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + rows.map(r => r.map(q).join(',')).join('\r\n')], { type: 'text/csv' }));
+  a.download = 'rollingpaper.csv'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+$('wipe').onclick = run(async () => {
+  if (prompt('모두 지우려면 "삭제"라고 쓰세요.') !== '삭제') return;
+  await store.wipe(); $('print').replaceChildren(); cfg = null; msgs = []; seeds = {}; draw(); say('모두 지웠어요.');
+});
+try {
+  $('localNote').hidden = !['localhost', '127.0.0.1'].includes(location.hostname);
+  L = await (await fetch('layout.json')).json();
+  store = await openStore(true);
+  $('demo').hidden = !store.demo;
+  $('login').onclick = run(() => store.login());
+  $('logout').onclick = run(() => store.logout());
+  store.onUser(u => {
+    $('login').hidden = !!u; $('logout').hidden = store.demo; $('print').replaceChildren();
+    if (!u) { $('app').hidden = true; cfg = null; msgs = []; seeds = {}; draw(); say(''); return; }
+    run(async () => {
+      try { await load(); } catch (e) { if (e.code === 'permission-denied') await store.logout(); throw e; }
+      $('app').hidden = false; say(u.email);
+    })();
+  });
+} catch (e) { say(e.message, true); }
+</script></body></html>

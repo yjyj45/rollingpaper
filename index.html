@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>딸기반 롤링페이퍼</title><link rel="stylesheet" href="style.css"></head><body>
+<div class="demo" id="demo" hidden>시험 모드: 이 브라우저에만 저장됩니다</div>
+<main><div class="card"><h1>딸기반 롤링페이퍼</h1><p id="status" role="status">불러오는 중…</p>
+<form id="form" hidden>
+  <div id="hero" class="hero" hidden></div>
+  <div id="toBox"><label for="to">롤링페이퍼 주인공</label><select id="to" required></select></div>
+  <label for="from">내 이름</label><select id="from" required></select>
+  <label for="text">친구에게 해주고 싶은 말</label><textarea id="text" rows="5" required></textarea>
+  <div class="count" id="count"></div>
+  <button id="send">제출하기</button>
+  <p>제출한 뒤에는 고치거나 다시 볼 수 없어요. 한 번 더 읽어 보세요.</p>
+</form>
+<div id="done" hidden><p class="hero">제출했어요!</p><button id="again" type="button">다른 친구에게도 쓰기</button></div>
+</div></main>
+<script type="module">
+import { openStore } from './store.js';
+import { people, clean, len } from './paper.js';
+const $ = i => document.getElementById(i);
+const say = (t, err) => { $('status').textContent = t; $('status').className = err ? 'err' : ''; };
+let store, P, max = 60, me = '', fixed = null, busy = false;
+const fill = (sel, list, keep) => {
+  sel.replaceChildren(new Option('선택하세요', ''), ...list.map(p => new Option(p.name, p.id)));
+  if (list.some(p => p.id === keep)) sel.value = keep;
+};
+const targets = () => P.filter(p => p.role === 'student');
+function sync() {
+  if (!fixed) fill($('to'), targets().filter(p => p.id !== $('from').value), $('to').value);
+  fill($('from'), P.filter(p => p.id !== (fixed || $('to').value)), $('from').value);
+}
+function count() { const n = len(clean($('text').value)); $('count').textContent = `${n} / ${max}자`; $('count').classList.toggle('over', n > max); }
+$('to').onchange = $('from').onchange = sync;
+$('text').oninput = count;
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  if (busy) return;
+  const to = fixed || $('to').value, from = $('from').value, text = clean($('text').value), n = len(text);
+  if (!n || n > max) return say(n ? `${max}자까지 쓸 수 있어요.` : '문구를 써 주세요.', true);
+  if (!confirm(`${P.find(p => p.id === to).name}에게 보낼까요?\n보낸 뒤에는 고칠 수 없어요.`)) return;
+  busy = true; $('send').disabled = true; say('보내는 중…');
+  try {
+    await Promise.race([store.submit(to, from, text), new Promise((_, r) => setTimeout(() => r({ code: 'timeout' }), 15000))]);
+    me = from; $('text').value = ''; count(); say('');
+    $('form').hidden = true; $('done').hidden = false;
+  } catch (x) {
+    say(x.code === 'permission-denied' ? '이미 이 친구에게 제출했거나 제출이 마감되었어요. 아니라면 선생님께 알려 주세요.' : '인터넷 연결을 확인하고 다시 눌러 주세요.', true);
+  }
+  busy = false; $('send').disabled = false;
+};
+$('again').onclick = () => { $('done').hidden = true; $('form').hidden = false; $('to').value = ''; $('from').value = me; sync(); };
+try {
+  const L = await (await fetch('layout.json')).json();
+  max = L.maxChars;
+  store = await openStore();
+  $('demo').hidden = !store.demo;
+  const cfg = await store.getConfig();
+  if (!cfg) say('선생님이 아직 준비하고 있어요.');
+  else if (!cfg.open) say('지금은 제출 기간이 아니에요.');
+  else {
+    P = people(cfg);
+    const q = new URLSearchParams(location.search).get('to');
+    if (q) {
+      const t = targets().find(p => p.id === q);
+      if (!t) throw new Error('링크가 올바르지 않아요. 선생님께 확인해 주세요.');
+      fixed = t.id; $('toBox').hidden = true; $('to').required = false;
+      $('hero').hidden = false; $('hero').textContent = `${t.name}에게`; $('again').hidden = true;
+    }
+    fill($('to'), targets()); fill($('from'), P); sync(); count(); say(''); $('form').hidden = false;
+  }
+} catch (e) { say(e.code ? '불러오지 못했어요. 잠시 뒤 다시 열어 주세요.' : e.message, true); }
+</script></body></html>

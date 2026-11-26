@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    // 콘솔에 붙여넣을 때만 교사 Google 이메일로 바꾸세요. (저장소에는 올리지 마세요)
+    function isTeacher() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'TEACHER_EMAIL';
+    }
+    function cfg() { return get(/databases/$(db)/documents/config/main).data; }
+    function validSubmission(id) {
+      let d = request.resource.data;
+      let c = cfg();
+      return c.open == true
+        && d.keys().hasOnly(['to', 'from', 'text', 'hidden', 'createdAt'])
+        && d.keys().hasAll(['to', 'from', 'text', 'hidden', 'createdAt'])
+        && d.to is string && d.from is string && d.text is string
+        && id == d.to + '_' + d.from
+        && d.to != d.from
+        && d.to in c.people && d.from in c.people
+        && c.people[d.to].role == 'student'
+        && d.text.size() >= 1 && d.text.size() <= 120
+        && d.hidden == false
+        && d.createdAt == request.time;
+    }
+    match /config/main {
+      allow get: if true;
+      allow write: if isTeacher();
+    }
+    // 학생: 새로 제출만 가능. 열람·수정·삭제는 교사만.
+    match /messages/{id} {
+      allow create: if validSubmission(id);
+      allow read, update, delete: if isTeacher();
+    }
+    match /placements/{id} {
+      allow read, write: if isTeacher();
+    }
+  }
+}
