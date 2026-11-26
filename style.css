@@ -14,6 +14,7 @@ button.sub{background:#ece6cf;color:#2b1a17}button:disabled{opacity:.5}
 .row{border-top:1px solid #e5dfc5;padding:10px 0;overflow-wrap:anywhere}.row.off{opacity:.5}
 table{width:100%;border-collapse:collapse;font-size:.9rem}td,th{text-align:left;padding:6px;border-top:1px solid #e5dfc5;vertical-align:top}
 .link{font-family:Consolas,monospace;font-size:.85rem;overflow-wrap:anywhere;user-select:all}
+.updated{font-size:.85rem;color:#6b5d4f}
 #links td{vertical-align:middle}#links button{margin:0;padding:6px 12px}
 .paper{display:block;width:100%;height:auto}.scroll{overflow-x:auto}
 #print{display:none}
